@@ -1,0 +1,17 @@
+[Unit]
+Description=Multi-tenant KV demo application
+After=vault-proxy.service
+
+[Service]
+User=demoapp
+Group=demoapp
+Environment=VAULT_ADDR=http://127.0.0.1:8200
+Environment=VAULT_NAMESPACE=apps
+Environment=KV_MOUNT=kv-demo
+Environment=TENANTS=acme,globex,initech
+ExecStart=/usr/bin/python3 -u /opt/kv-demo/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

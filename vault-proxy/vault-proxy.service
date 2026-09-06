@@ -1,0 +1,14 @@
+[Unit]
+Description=Vault Proxy (API proxy and KV cache)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=demoapp
+Group=demoapp
+ExecStart=/usr/bin/vault proxy -config=/etc/vault-proxy/proxy.hcl
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
