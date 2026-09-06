@@ -110,7 +110,62 @@ rotate)  # change a secret and watch the cache pick it up without polling
       value="sk-$t-$(openssl rand -hex 6)" tenant="$t" \
       downstream="https://api.$t.example.com" >/dev/null
   echo "Rotated $t in Vault. Re-read it on the page - the value and kv version change,"
-  echo "because Vault Proxy is subscribed to KV events and evicted its cached copy."
+  echo "because Vault Proxy is subscribed to KV events and refreshed its cached copy."
+  ;;
+
+watch)   # is the cache REFRESHED on the event, or invalidated so the next read pays?
+  # Polls one tenant every 200ms, rotates it mid-flight, and prints the reads around
+  # the change. If the cache were invalidated, the first read showing the new value
+  # would be slow (a trip to Vault). It is not - it is a cache hit like the others.
+  t="${2:-acme}"
+  python3 - "$t" "$VAULT_NAMESPACE" > /tmp/kv-watch-params.json <<'PY'
+import json, sys
+tenant, ns = sys.argv[1], sys.argv[2]
+hdr = f"-H X-Vault-Request:true -H X-Vault-Namespace:{ns}"
+url = f"http://127.0.0.1:8200/v1/kv-demo/data/tenants/{tenant}/api-key"
+py  = ('python3 -c "import json,hashlib;d=json.load(open(\\"/tmp/w.json\\"))[\\"data\\"];'
+       'print(d[\\"metadata\\"][\\"version\\"],hashlib.sha256(d[\\"data\\"][\\"value\\"]'
+       '.encode()).hexdigest()[:8])"')
+loop = ("nohup bash -c 'for i in $(seq 1 150); do "
+        f't=$(curl -s -o /tmp/w.json -w "%{{time_total}}" {hdr} {url}); '
+        f'v=$({py}); '
+        'echo "$(date -u +%H:%M:%S.%3N)  ${t}s  ver+sha $v" >> /tmp/kv-watch.log; '
+        "sleep 0.2; done' >/dev/null 2>&1 &")
+json.dump({"commands": ["rm -f /tmp/kv-watch.log", loop, "echo watcher-started"]}, sys.stdout)
+PY
+  id=$(iid)
+  aws ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
+      --parameters file:///tmp/kv-watch-params.json --query 'Command.CommandId' --output text >/dev/null
+  echo "Watching $t every 200ms..."
+  sleep 6
+  vault kv put "kv-demo/tenants/$t/api-key" \
+      value="sk-$t-$(openssl rand -hex 6)" tenant="$t" \
+      downstream="https://api.$t.example.com" >/dev/null
+  echo "Rotated $t in Vault at $(date -u +%H:%M:%S) UTC. Collecting..."
+  sleep 10
+  # print a window centred on the change, not the tail - the interesting line is the
+  # first read carrying the new value, and it sits in the middle of the run.
+  ssm_run '["grep . /tmp/kv-watch.log","pkill -f \"seq 1 150\" 2>/dev/null; true"]' \
+    | awk '/ver\+sha/ { n++; line[n] = $0; fp[n] = $4 $5; next }
+           END {
+             for (i = 2; i <= n; i++) if (fp[i] != fp[i-1]) { ch = i; break }
+             if (ch == 0) { print "  (no change seen - was the rotation permitted?)"; for (i = 1; i <= n; i++) print line[i]; exit }
+             s = ch - 8; if (s < 1) s = 1
+             e = ch + 8; if (e > n) e = n
+             for (i = s; i <= e; i++) {
+               if (i == ch) print "   ---- rotation lands here; the NEXT line is the first read of the new value ----"
+               print line[i]
+             }
+           }'
+  cat <<'EOF'
+
+Read the latency column across the change. Every read is a cache hit, including the
+first one carrying the new value. Vault Proxy re-read the secret when the event
+arrived and replaced the cache entry, so no request ever waited on Vault.
+
+(Vault's event payloads carry no secret material by design - only the path. The proxy
+must therefore re-read the secret itself, which it does off the request path.)
+EOF
   ;;
 
 session)
@@ -157,7 +212,8 @@ KV static-secret caching with Vault Proxy - demo helper
   ./scripts/demo.sh cold       empty the proxy cache   <-- RUN THIS FIRST
   ./scripts/demo.sh start      port-forward the page to localhost:8083
   ./scripts/demo.sh compare    first read vs cached read, side by side, in one command
-  ./scripts/demo.sh rotate acme  change the secret in Vault; the cache evicts on the event
+  ./scripts/demo.sh rotate acme  change the secret in Vault; the cache refreshes on the event
+  ./scripts/demo.sh watch acme  rotate mid-poll: is the cache refreshed or invalidated?
   ./scripts/demo.sh noproxy    show the app holds no token, and what happens without one
   ./scripts/demo.sh secrets    what is in KV
   ./scripts/demo.sh fetch acme  one read, from the command line

@@ -212,7 +212,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
     </table>
     <p class="note">Latency is the whole story. The first read of a tenant travels to Vault; later reads are
        answered on the loopback interface. Vault Proxy keeps the cached copy honest by subscribing to Vault's
-       event feed, so editing the secret in Vault evicts it here — no polling, and no stale value.</p>
+       event feed, so editing the secret in Vault refreshes it here — no polling, and no stale value.</p>
   </div>
 </div>
 

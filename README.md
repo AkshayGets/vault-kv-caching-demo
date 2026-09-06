@@ -293,7 +293,8 @@ not known until the request arrives.
 ```
 
 Re-read `acme` on the page. The value and the KV version have changed — **without polling**. The
-proxy is subscribed to Vault's KV events, so it evicted its copy the moment the secret changed.
+proxy is subscribed to Vault's KV events, so it refreshed its copy the moment the secret changed
+— the first read of the new value is still a cache hit. Prove it with `./scripts/demo.sh watch acme`.
 That is the part a hand-written cache almost never gets right, and it is worth pausing on.
 
 ### Everything in one command
